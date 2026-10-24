@@ -1,0 +1,8 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+httpx>=0.27
+pydantic>=2.7
+# Чтение PDF-файлов для RAG
+pypdf>=4.0
+# Нужен только если используете провайдера Anthropic (PROVIDER=anthropic)
+anthropic>=0.40

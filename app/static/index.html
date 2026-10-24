@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM Service</title>
+<!-- KaTeX рисует формулы. Загружается из интернета; без сети формулы остаются обычным текстом. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1c1e21; --muted:#6b7280; --accent:#4f46e5; --user:#e0e7ff; --bot:#f1f5f9; --border:#e5e7eb; --code:#e2e8f0; --danger:#dc2626; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f1115; --card:#181b21; --text:#e8eaed; --muted:#9aa0a6; --accent:#818cf8; --user:#2b2f55; --bot:#22262e; --border:#2a2e36; --code:#2f343d; --danger:#f87171; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--text); }
+  .wrap { max-width:760px; margin:0 auto; height:100dvh; display:flex; flex-direction:column; padding:16px; gap:12px; }
+  header { display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
+  h1 { font-size:18px; margin:0; }
+  #status { font-size:13px; color:var(--muted); }
+  .tabs { display:flex; gap:6px; }
+  .tab { background:transparent; color:var(--muted); border:1px solid var(--border); padding:6px 14px; border-radius:999px; cursor:pointer; font:inherit; font-size:14px; }
+  .tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .panel { flex:1; min-height:0; display:flex; flex-direction:column; gap:12px; }
+  .hidden { display:none !important; }
+  #log, #docs-box { flex:1; overflow-y:auto; background:var(--card); border:1px solid var(--border); border-radius:12px; padding:12px; }
+  #log { display:flex; flex-direction:column; gap:10px; }
+  .msg { padding:10px 14px; border-radius:12px; max-width:88%; word-wrap:break-word; overflow-wrap:anywhere; }
+  .user { background:var(--user); align-self:flex-end; white-space:pre-wrap; }
+  .bot { background:var(--bot); align-self:flex-start; }
+  .bot > :first-child { margin-top:0; } .bot > :last-child { margin-bottom:0; }
+  .bot p { margin:.5em 0; } .bot ul, .bot ol { margin:.5em 0; padding-left:1.4em; } .bot li { margin:.15em 0; }
+  .bot h3, .bot h4, .bot h5, .bot h6 { margin:.8em 0 .3em; line-height:1.3; }
+  .bot code { background:var(--code); padding:.1em .35em; border-radius:4px; font-size:.9em; }
+  .bot pre { background:var(--code); padding:10px 12px; border-radius:8px; overflow-x:auto; }
+  .bot pre code { background:none; padding:0; }
+  .bot a { color:var(--accent); }
+  .bot .katex-display { overflow-x:auto; overflow-y:hidden; margin:.6em 0; }
+  .err { color:var(--danger); }
+  .tag { font-size:11px; color:var(--muted); display:block; margin-top:6px; }
+  details.src { margin-top:8px; font-size:13px; color:var(--muted); }
+  details.src summary { cursor:pointer; }
+  details.src div { margin-top:6px; padding:6px 8px; background:var(--card); border:1px solid var(--border); border-radius:8px; white-space:pre-wrap; }
+  details.src b { color:var(--text); }
+  form { display:flex; gap:8px; }
+  textarea { flex:1; resize:none; padding:10px 12px; border-radius:10px; border:1px solid var(--border); background:var(--card); color:var(--text); font:inherit; }
+  button.primary { padding:0 18px; border:0; border-radius:10px; background:var(--accent); color:#fff; font:inherit; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  .ghost { background:transparent; color:var(--muted); border:1px solid var(--border); padding:4px 10px; font-size:13px; border-radius:8px; cursor:pointer; font-family:inherit; }
+  .rag-toggle { font-size:14px; color:var(--muted); display:flex; gap:6px; align-items:center; }
+  .doc { display:flex; justify-content:space-between; align-items:center; padding:8px 4px; border-bottom:1px solid var(--border); gap:8px; }
+  .doc small { color:var(--muted); display:block; }
+  .hint { color:var(--muted); font-size:14px; margin:0 0 10px; }
+  .upload { display:flex; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>LLM Service</h1>
+    <div class="tabs">
+      <button class="tab active" id="tab-chat" type="button">Чат</button>
+      <button class="tab" id="tab-docs" type="button">Документы (<span id="doc-count">0</span>)</button>
+    </div>
+    <span><span id="status">…</span> <button class="ghost" id="clear" type="button">Очистить</button></span>
+  </header>
+
+  <section class="panel" id="panel-chat">
+    <div id="log"></div>
+    <label class="rag-toggle"><input type="checkbox" id="rag"> Отвечать по моим документам</label>
+    <form id="form">
+      <textarea id="input" rows="2" placeholder="Напишите сообщение… (Enter — отправить)" autofocus></textarea>
+      <button class="primary" id="send" type="submit">Отправить</button>
+    </form>
+  </section>
+
+  <section class="panel hidden" id="panel-docs">
+    <div id="docs-box">
+      <p class="hint">Загрузите файлы .txt, .md или .pdf. Потом включите «Отвечать по моим документам» в чате, и ответы будут опираться на ваши файлы, со ссылками на источники.</p>
+      <div class="upload">
+        <input type="file" id="file" multiple accept=".txt,.md,.markdown,.pdf,.csv">
+        <span id="upload-status" class="hint" style="margin:0"></span>
+      </div>
+      <p class="hint" id="sem-hint"></p>
+      <button class="ghost hidden" id="reindex" type="button" style="margin-bottom:10px">Включить поиск по смыслу для старых файлов</button>
+      <div id="docs-list"></div>
+    </div>
+  </section>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const log = $('log'), input = $('input'), send = $('send');
+let history = [];
+let docCount = 0;
+
+/* ---------- безопасный мини-Markdown: сначала экранируем HTML, потом размечаем ---------- */
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+/* Формулы LaTeX: \( .. \), \[ .. \], $$ .. $$ и $x$. Перед разбором Markdown их заменяем метками,
+   чтобы звёздочки и подчёркивания внутри формул не принимались за разметку. */
+const MATH_RE = /\\\[([\s\S]+?)\\\]|\$\$([\s\S]+?)\$\$|\\\(([\s\S]+?)\\\)|(?<![\\$\w])\$([^\s$](?:[^$\n]*?[^\s$])?)\$(?![\w$])/g;
+let curMaths = [];
+const unmath = s => s.replace(/§§M(\d+)§§/g, (_, i) => curMaths[+i].raw);   // в коде формулы остаются текстом
+
+function renderMath(m) {
+  if (window.katex) {
+    try { return katex.renderToString(m.tex, { displayMode: m.display, throwOnError: false }); } catch (e) { /* покажем как текст */ }
+  }
+  return esc(m.raw);
+}
+
+function inline(s) {
+  return s.split(/(`[^`]+`)/).map(part => {
+    if (part.length > 2 && part[0] === '`' && part.endsWith('`')) return '<code>' + esc(unmath(part.slice(1, -1))) + '</code>';
+    let t = esc(part);
+    t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    t = t.replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>');
+    t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    return t;
+  }).join('');
+}
+
+function md(src) {
+  curMaths = [];
+  src = src.replace(MATH_RE, (m, a, b, c, d) => {
+    curMaths.push({ tex: (a ?? b ?? c ?? d).trim(), display: a !== undefined || b !== undefined, raw: m });
+    return '§§M' + (curMaths.length - 1) + '§§';
+  });
+  const lines = src.replace(/\r/g, '').split('\n');
+  let html = '', list = null, i = 0;
+  const close = () => { if (list) { html += '</' + list + '>'; list = null; } };
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^```/.test(line)) {
+      close();
+      const code = []; i++;
+      while (i < lines.length && !/^```/.test(lines[i])) code.push(lines[i++]);
+      i++;
+      html += '<pre><code>' + esc(unmath(code.join('\n'))) + '</code></pre>';
+      continue;
+    }
+    let m;
+    if ((m = line.match(/^(#{1,4})\s+(.*)/))) {
+      close(); const n = Math.min(m[1].length + 2, 6);
+      html += `<h${n}>${inline(m[2])}</h${n}>`;
+    } else if ((m = line.match(/^\s*[-*•]\s+(.*)/))) {
+      if (list !== 'ul') { close(); html += '<ul>'; list = 'ul'; }
+      html += '<li>' + inline(m[1]) + '</li>';
+    } else if ((m = line.match(/^\s*(\d+)[.)]\s+(.*)/))) {
+      if (list !== 'ol') { close(); html += `<ol start="${m[1]}">`; list = 'ol'; }
+      html += '<li>' + inline(m[2]) + '</li>';
+    } else if (line.trim() === '') {
+      close();
+    } else {
+      close(); html += '<p>' + inline(line) + '</p>';
+    }
+    i++;
+  }
+  close();
+  return html.replace(/§§M(\d+)§§/g, (_, i) => renderMath(curMaths[+i]));
+}
+
+/* ---------- чат ---------- */
+function add(role, text) {
+  const el = document.createElement('div');
+  el.className = 'msg ' + role;
+  if (role === 'user') el.textContent = text; else el.innerHTML = md(text);
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+  return el;
+}
+
+function renderSources(bot, sources) {
+  if (!sources || !sources.length) return;
+  const d = document.createElement('details'); d.className = 'src';
+  const s = document.createElement('summary');
+  s.textContent = sources.some(x => x.overview)
+    ? 'Начало документов (по вопросу ничего конкретного не найдено)'
+    : 'Источники (' + sources.length + ')';
+  d.appendChild(s);
+  for (const src of sources) {
+    const row = document.createElement('div');
+    const b = document.createElement('b'); b.textContent = '[' + src.n + '] ' + src.doc;
+    row.appendChild(b);
+    row.appendChild(document.createTextNode('\n' + src.snippet + (src.snippet.length >= 240 ? '…' : '')));
+    d.appendChild(row);
+  }
+  bot.appendChild(d);
+}
+
+fetch('/health').then(r => r.json()).then(h => {
+  $('status').textContent = h.mock_mode ? 'режим-заглушка' : h.provider + ' · ' + h.model;
+}).catch(() => $('status').textContent = 'нет связи');
+
+$('clear').onclick = () => { history = []; log.innerHTML = ''; };
+input.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('form').requestSubmit(); }
+});
+
+$('form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const text = input.value.trim();
+  if (!text) return;
+  const useRag = $('rag').checked;
+  input.value = '';
+  send.disabled = true;
+  history.push({ role: 'user', content: text });
+  add('user', text);
+  const bot = add('bot', '');
+  let full = '', sources = [], cached = false;
+  const draw = () => {
+    bot.innerHTML = md(full);
+    if (cached) { const t = document.createElement('span'); t.className = 'tag'; t.textContent = 'из кэша'; bot.appendChild(t); }
+    renderSources(bot, sources);
+    log.scrollTop = log.scrollHeight;
+  };
+  try {
+    const res = await fetch(useRag ? '/api/ask/stream' : '/api/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(useRag ? { question: text } : { messages: history }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || ('HTTP ' + res.status));
+    }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const events = buf.split('\n\n');
+      buf = events.pop();
+      for (const ev of events) {
+        const data = ev.replace(/^data: /, '');
+        if (data === '[DONE]') continue;
+        const obj = JSON.parse(data);
+        if (obj.error) throw new Error(obj.error);
+        if (obj.sources) sources = obj.sources;
+        if (obj.delta) full += obj.delta;
+        if (obj.cached) cached = true;
+        draw();
+      }
+    }
+    draw();
+    history.push({ role: 'assistant', content: full });
+  } catch (err) {
+    bot.className = 'msg bot err';
+    bot.textContent = 'Ошибка: ' + err.message;
+    history.pop();
+  } finally {
+    send.disabled = false;
+    input.focus();
+  }
+});
+
+/* ---------- вкладки ---------- */
+function showTab(name) {
+  $('panel-chat').classList.toggle('hidden', name !== 'chat');
+  $('panel-docs').classList.toggle('hidden', name !== 'docs');
+  $('tab-chat').classList.toggle('active', name === 'chat');
+  $('tab-docs').classList.toggle('active', name === 'docs');
+  if (name === 'docs') loadDocs();
+}
+$('tab-chat').onclick = () => showTab('chat');
+$('tab-docs').onclick = () => showTab('docs');
+
+/* ---------- документы ---------- */
+async function loadDocs() {
+  const [res, health] = await Promise.all([
+    fetch('/api/docs'),
+    fetch('/health').then(r => r.json()).catch(() => ({})),
+  ]);
+  const docs = res.ok ? await res.json() : [];
+  docCount = docs.length;
+  $('doc-count').textContent = docCount;
+  const semOn = !!health.semantic;
+  $('sem-hint').textContent = semOn
+    ? 'Поиск по смыслу включён: вопрос на русском найдёт и английский текст.'
+    : 'Поиск идёт только по словам. Для поиска по смыслу задайте GEMINI_API_KEY и перезапустите сервер.';
+  $('reindex').classList.toggle('hidden', !(semOn && docs.some(d => !d.semantic)));
+  const list = $('docs-list');
+  list.innerHTML = '';
+  if (!docs.length) {
+    const p = document.createElement('p'); p.className = 'hint'; p.textContent = 'Пока нет документов.';
+    list.appendChild(p);
+  }
+  for (const d of docs) {
+    const row = document.createElement('div'); row.className = 'doc';
+    const info = document.createElement('div');
+    info.textContent = d.name;
+    const small = document.createElement('small');
+    small.textContent = d.chunks + ' фрагм. · ' + d.chars + ' симв. · ' + (d.semantic ? 'по смыслу и словам' : 'только по словам');
+    info.appendChild(small);
+    const del = document.createElement('button'); del.className = 'ghost'; del.textContent = 'Удалить';
+    del.onclick = async () => { await fetch('/api/docs/' + d.id, { method: 'DELETE' }); loadDocs(); };
+    row.append(info, del);
+    list.appendChild(row);
+  }
+  if (!docCount) $('rag').checked = false;
+}
+
+$('file').addEventListener('change', async e => {
+  const files = [...e.target.files];
+  const status = $('upload-status');
+  const warnings = [];
+  for (const f of files) {
+    status.textContent = 'Загружаю ' + f.name + '…';
+    const res = await fetch('/api/docs?name=' + encodeURIComponent(f.name), { method: 'POST', body: f });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      status.textContent = f.name + ': ' + (err.detail || 'ошибка ' + res.status);
+      status.classList.add('err');
+      await loadDocs();
+      e.target.value = '';
+      return;
+    }
+    status.classList.remove('err');
+    const doc = await res.json().catch(() => ({}));
+    if (doc.semantic_error) warnings.push(f.name + ': поиск по смыслу не включился (' + doc.semantic_error + ')');
+  }
+  status.textContent = warnings.length ? 'Загружено, но ' + warnings.join('; ') : (files.length ? 'Готово' : '');
+  e.target.value = '';
+  await loadDocs();
+  if (docCount) $('rag').checked = true;
+});
+
+$('reindex').addEventListener('click', async () => {
+  const btn = $('reindex'), status = $('upload-status');
+  btn.disabled = true;
+  status.classList.remove('err');
+  status.textContent = 'Считаю векторы…';
+  try {
+    const res = await fetch('/api/docs/reindex', { method: 'POST' });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(out.detail || ('HTTP ' + res.status));
+    status.textContent = out.failed && out.failed.length
+      ? 'Готово: ' + out.indexed + ', не удалось: ' + out.failed.map(f => f.name + ' (' + f.error + ')').join('; ')
+      : 'Готово: обработано файлов — ' + out.indexed;
+  } catch (err) {
+    status.classList.add('err');
+    status.textContent = 'Ошибка: ' + err.message;
+  } finally {
+    btn.disabled = false;
+    await loadDocs();
+  }
+});
+
+loadDocs();
+</script>
+</body>
+</html>
